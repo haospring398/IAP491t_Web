@@ -1,0 +1,84 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { createServer } from "node:http";
+import { spawn, type ChildProcess } from "node:child_process";
+import { once } from "node:events";
+import { readFile, readdir } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
+import { setTimeout as delay } from "node:timers/promises";
+import { randomUUID } from "node:crypto";
+import { chromium } from "@playwright/test";
+
+const root = fileURLToPath(new URL("../../../../", import.meta.url));
+async function freePort() {
+  const server = createServer(); server.listen(0, "127.0.0.1"); await once(server, "listening");
+  const port = (server.address() as { port: number }).port;
+  await new Promise<void>(resolve => server.close(() => resolve())); return port;
+}
+async function stop(child: ChildProcess) {
+  if (child.exitCode !== null) return;
+  const exited = once(child, "exit");
+  if (process.platform === "win32") {
+    const cleanup = spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+    await once(cleanup, "exit");
+  } else child.kill();
+  await exited;
+}
+async function waitFor(url: string, child: ChildProcess, limit: number) {
+  const deadline = Date.now() + limit;
+  while (Date.now() < deadline) {
+    assert.equal(child.exitCode, null, "Local service exited during startup");
+    try { if ((await fetch(url, { signal: AbortSignal.timeout(3000) })).status === 200) return; } catch {}
+    await delay(100);
+  }
+  throw new Error("Local service readiness timeout");
+}
+
+test("actual pinned model: five MIME cases through Python, Next proxy and browser; unavailable clears result", { timeout: 180000 }, async t => {
+  const token = randomUUID();
+  const backendPort = await freePort(), frontendPort = await freePort();
+  const api = `http://127.0.0.1:${backendPort}`, web = `http://127.0.0.1:${frontendPort}`;
+  const python = process.platform === "win32" ? ".venv/Scripts/python.exe" : ".venv/bin/python";
+  const backend = spawn(python, ["-m", "web.backend", "--port", String(backendPort)], {
+    cwd: root, windowsHide: true, stdio: "ignore", env: { ...process.env, ML_API_TOKEN: token },
+  });
+  t.after(() => stop(backend));
+  await waitFor(`${api}/health/ready`, backend, 120000);
+  const next = spawn(process.execPath, ["node_modules/next/dist/bin/next", process.env.FRONTEND_TEST_DEV === "1" ? "dev" : "start", "--hostname", "127.0.0.1", "--port", String(frontendPort)], {
+    cwd: process.cwd(), windowsHide: true, stdio: "ignore",
+    env: { ...process.env, NEXT_TELEMETRY_DISABLED: "1", ML_API_URL: api, ML_API_TOKEN: token },
+  });
+  t.after(() => stop(next));
+  await waitFor(web, next, 60000);
+  const browser = await chromium.launch({ channel: process.env.PLAYWRIGHT_CHANNEL });
+  t.after(() => browser.close());
+  const page = await browser.newPage(); await page.goto(web);
+  assert.match(await page.getByRole("note").innerText(), /positive class includes spam and phishing/);
+  const samples = new URL("../../../backend/samples/", import.meta.url);
+  const names = (await readdir(samples)).filter(name => name.endsWith(".eml")).sort();
+  assert.equal(names.length, 5);
+  for (const name of names) {
+    const bytes = await readFile(new URL(name, samples));
+    const form = new FormData(); form.append("file", new File([bytes], "message.eml"));
+    const direct = await fetch(`${api}/v1/analyze`, { method: "POST", body: form,
+      headers: { Authorization: `Bearer ${token}`, "X-Request-ID": randomUUID(), "X-Analysis-Deadline": String(Date.now() + 150000) } });
+    assert.equal(direct.status, 200);
+    const expected = await direct.json() as { analysis_status: string; label: string };
+    assert.deepEqual(Object.keys(expected).sort(), ["analysis_status", "label"]);
+    assert(["legit", "spam_or_phishing"].includes(expected.label));
+    const filename = `browser-${name}`;
+    await page.locator("#email-file").setInputFiles({ name: filename, mimeType: "message/rfc822", buffer: bytes });
+    const response = page.waitForResponse(r => r.url() === `${web}/api/analyze` && r.request().method() === "POST");
+    await page.getByRole("button", { name: "Analyze", exact: true }).click();
+    assert.deepEqual(await (await response).json(), expected);
+    await page.locator(".result-label").waitFor();
+    assert.equal(await page.locator(".result-label").innerText(), `Result: ${expected.label === "legit" ? "Legit" : "Spam / phishing"}`);
+    assert.equal(await page.locator(".status-result-area .filename").innerText(), filename);
+  }
+  await stop(backend);
+  await page.locator("#email-file").setInputFiles({ name: "unavailable.eml", mimeType: "message/rfc822", buffer: await readFile(new URL("plain.eml", samples)) });
+  await page.getByRole("button", { name: "Analyze", exact: true }).click();
+  await page.getByLabel("Analysis status").getByRole("alert").waitFor();
+  assert.equal(await page.locator(".result-label").count(), 0);
+  assert.match(await page.getByLabel("Analysis status").getByRole("alert").innerText(), /could not be reached/);
+});
