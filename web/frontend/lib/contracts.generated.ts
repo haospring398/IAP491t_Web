@@ -54,7 +54,6 @@ export interface TransportPolicy {
     clockSkewMs: number;
     terminateMs: number;
     killReapMs: number;
-    handlerSeconds: number;
   };
   retry: {
     maxRetries: number;

@@ -1,6 +1,5 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import { isSuccess, isError, isStatus, isRequestId, policy, validatePolicy } from "../../lib/contracts";
 const id = "672f0ea9-e237-45cd-8c08-8710f89b8258";
 test("exact schemas accept declared release labels and reject aliases, extras and incomplete results", () => {
@@ -13,14 +12,13 @@ test("exact schemas accept declared release labels and reject aliases, extras an
   assert(!isStatus({ request_id: id, phase: "processing", label: "legit" }));
   assert(!isStatus({ request_id: id, phase: "completed" }));
 });
-test("UUID is v4 correlation and policy validates bounds, errors and static handler budget", () => {
+test("UUID is v4 correlation and policy validates bounds and errors", () => {
   assert(isRequestId(id)); assert(!isRequestId(id.replace("45cd", "15cd")));
   assert(!isRequestId("not-an-id"));
   validatePolicy(policy);
   const invalid = structuredClone(policy); invalid.deadlines.browserMs = invalid.deadlines.proxyMs;
   assert.throws(() => validatePolicy(invalid));
   assert.throws(() => validatePolicy({ ...policy, limits: {} }));
-  assert.match(readFileSync(new URL("../../app/api/analyze/route.ts", import.meta.url), "utf8"), new RegExp(`maxDuration = ${policy.deadlines.handlerSeconds}`));
 });
 test("recovery policy cannot make input errors retryable or operational failures permanent", () => {
   for (const [code, error] of Object.entries(policy.errors)) {

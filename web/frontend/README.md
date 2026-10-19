@@ -15,25 +15,11 @@ npm.cmd run dev
 
 Open http://127.0.0.1:3000. Without a configured AI service the interface works and Analyze reports MODEL_UNAVAILABLE. There is no simulated classification fallback. Files and results are held in memory and cleared on refresh.
 
-## Vercel
+## Backend connection and build
 
-Import this GitHub repository and select:
+Set server-only `ML_API_URL=http://127.0.0.1:8000` and `ML_API_TOKEN` in `.env.local` or the shell, matching the local Python service. Never prefix these with NEXT_PUBLIC or commit a real token. Keep credentials and endpoints separate for each environment. Leave configuration empty when no service is available.
 
-| Setting | Value |
-| --- | --- |
-| Production branch | master |
-| Framework preset | Next.js |
-| Root Directory | web/frontend |
-| Node.js version | 24.x |
-| Install Command | npm ci |
-| Build Command | npm run build |
-| Output Directory | Default |
-
-Enable **Include source files outside of the Root Directory in the Build Step** so the sibling `web/contracts/` directory is available. Use the frontend directory for this Vercel project; the repository root contains an existing unrelated Vite application.
-
-References: [Vercel shared-source settings](https://vercel.com/docs/monorepos/monorepo-faq), [Node.js versions](https://vercel.com/docs/functions/runtimes/node-js/node-js-versions).
-
-Leave AI variables unset for a UI-only deployment. When a compatible separate HTTPS AI service is hosted, configure **server-only** `ML_API_URL` and `ML_API_TOKEN` in Vercel and redeploy. The token must match that service. Never prefix these with NEXT_PUBLIC or commit a real token. Use separate preview and production credentials. Vercel cannot reach the developer's localhost.
+Build with `npm.cmd run build`; use `npm.cmd start` for the local production server. Keep `web/frontend/` and the sibling `web/contracts/` directory together. Hosting is unspecified; future hosting requires a reachable backend, HTTPS, server-only secrets, suitable access controls and measured resource/deadline behavior.
 
 The proxy requires the [shared contract](../contracts/README.md): authenticated POST `/v1/analyze`, GET `/v1/analysis-status?request_id=<uuid>`, matching X-Request-ID, canonical response schemas, trusted deadlines and bounded response/upload consumption. The Python backend, model files and training data are not included in this frontend publication. Hosting and qualifying the AI service is a separate step.
 

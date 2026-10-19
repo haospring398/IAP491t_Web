@@ -22,7 +22,6 @@ export function validatePolicy(value: unknown): asserts value is TransportPolicy
   }
   if (!(p.limits.fileBytes < p.limits.multipartBytes &&
     p.deadlines.backendMs < p.deadlines.proxyMs && p.deadlines.proxyMs < p.deadlines.browserMs &&
-    p.deadlines.browserMs < p.deadlines.handlerSeconds * 1000 &&
     p.deadlines.backendReserveMs >= p.deadlines.clockSkewMs + p.deadlines.terminateMs + p.deadlines.killReapMs)) {
     throw new Error("Inconsistent shared transport policy");
   }
