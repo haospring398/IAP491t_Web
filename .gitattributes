@@ -1,0 +1,2 @@
+# Chữ ký tiền xử lý băm từng byte của các file này; không cho git đổi xuống dòng (LF/CRLF).
+web/backend/frozen_pipeline/*.py -text

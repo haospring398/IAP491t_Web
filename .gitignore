@@ -1,0 +1,26 @@
+__pycache__/
+*.py[cod]
+
+# Môi trường và dữ liệu tải về cục bộ
+venv/
+.venv/
+.matplotlib/
+nltk_data/
+
+# Cache tiền xử lý và sổ ingestion (tạo lại được)
+.pipeline_cache/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+
+# Run huấn luyện và model (lớn; prepared_*.pkl có thể chứa nội dung email)
+runs/
+dumped_models/classification/runs/
+
+# Tệp lớn hoặc tài liệu tham khảo không đưa vào git
+web.rar
+paper/
+
+# Cấu hình editor và log demo cục bộ
+.vscode/
+_bmad-output/implementation-artifacts/web-demo-local/
