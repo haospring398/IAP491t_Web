@@ -10,8 +10,8 @@
     {
       "source": "AGENTS.md",
       "snapshot": "PROJECT-CONTEXT.md",
-      "sourceSha256": "d6b3dbafc5553a8d28fbc450dbe1f5cc866fc8541f1cf8ce0eb5b7496cbaf113",
-      "snapshotSha256": "d6b3dbafc5553a8d28fbc450dbe1f5cc866fc8541f1cf8ce0eb5b7496cbaf113"
+      "sourceSha256": "9e957cc3e3faed609fc32a25f28f9934502e948b2be1b5b2bb6510c264a2eacf",
+      "snapshotSha256": "9e957cc3e3faed609fc32a25f28f9934502e948b2be1b5b2bb6510c264a2eacf"
     },
     {
       "source": "_bmad-output/implementation-artifacts/spec-integrate-zip-frontend.md",

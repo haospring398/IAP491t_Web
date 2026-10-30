@@ -20,6 +20,9 @@ dumped_models/classification/runs/
 # Tệp lớn hoặc tài liệu tham khảo không đưa vào git
 web.rar
 paper/
+# Dữ liệu corpus (khoảng 542 nghìn file) chỉ nằm trên máy; README mô tả nguồn vẫn theo dõi
+/Dataset/*/*
+!/Dataset/*/README.md
 
 # Cấu hình editor và log demo cục bộ
 .vscode/
