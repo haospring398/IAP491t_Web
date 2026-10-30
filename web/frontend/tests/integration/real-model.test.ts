@@ -5,12 +5,23 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { readFile, readdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import path from "node:path";
+import { existsSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import { randomUUID } from "node:crypto";
 import { chromium } from "@playwright/test";
 import { factorCatalogue } from "../../lib/contracts";
 
-const root = fileURLToPath(new URL("../../../../", import.meta.url));
+// Backend chạy độc lập từ web/ (python -m backend), không cần thư mục gốc của project.
+const webRoot = fileURLToPath(new URL("../../../", import.meta.url));
+// Python cho backend: IAP_WEB_PYTHON, rồi web/.venv, rồi .venv ở thư mục gốc repository.
+function backendPython() {
+  if (process.env.IAP_WEB_PYTHON) return process.env.IAP_WEB_PYTHON;
+  const relative = process.platform === "win32" ? ".venv/Scripts/python.exe" : ".venv/bin/python";
+  const found = [webRoot, path.join(webRoot, "..")].map(folder => path.join(folder, relative)).find(existsSync);
+  if (!found) assert.fail("No Python for the backend: set IAP_WEB_PYTHON or create web/.venv from backend/requirements.txt");
+  return found;
+}
 async function freePort() {
   const server = createServer(); server.listen(0, "127.0.0.1"); await once(server, "listening");
   const port = (server.address() as { port: number }).port;
@@ -39,9 +50,9 @@ test("actual pinned model: five MIME cases through Python, Next proxy and browse
   const token = randomUUID();
   const backendPort = await freePort(), frontendPort = await freePort();
   const api = `http://127.0.0.1:${backendPort}`, web = `http://127.0.0.1:${frontendPort}`;
-  const python = process.platform === "win32" ? ".venv/Scripts/python.exe" : ".venv/bin/python";
-  const backend = spawn(python, ["-m", "web.backend", "--port", String(backendPort)], {
-    cwd: root, windowsHide: true, stdio: "ignore", env: { ...process.env, ML_API_TOKEN: token },
+  const python = backendPython();
+  const backend = spawn(python, ["-m", "backend", "--port", String(backendPort)], {
+    cwd: webRoot, windowsHide: true, stdio: "ignore", env: { ...process.env, ML_API_TOKEN: token },
   });
   t.after(() => stop(backend));
   await waitFor(`${api}/health/ready`, backend, 120000);

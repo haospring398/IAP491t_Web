@@ -109,10 +109,13 @@ Số chiều và thứ tự feature lấy từ `preprocess.FEATURE_NAMES`; vecto
 ## Web demo
 
 Web demo chạy model thật từ một run baseline 19-10 (schema 2) ghim bằng `RUN_PATH`
-trong `web/backend/policy.py` hoặc biến môi trường `IAP_WEB_RUN_PATH`, không train
-hay đánh giá lại. Làm theo
+trong `web/backend/policy.py` hoặc biến môi trường `IAP_WEB_RUN_PATH` (đường dẫn tương
+đối tính từ `web/`), không train hay đánh giá lại. Run được đóng gói vào `web/model/`
+(git bỏ qua) bằng `python web/scripts/bundle-run.py --run runs/2026-10-23_web2`, nên thư
+mục `web/` chạy được khi chép riêng. Làm theo
 [web/backend/README.md](web/backend/README.md) để chạy
-`.venv/Scripts/python.exe -m web.backend` từ thư mục này, và cấu hình cùng token
+`.venv/Scripts/python.exe -m web.backend` từ thư mục này (hoặc `python -m backend` từ
+`web/` với `web/.venv`), và cấu hình cùng token
 server-only cho app Next trong [web/](web/README.md) (`cd web/frontend`,
 `npm.cmd run dev`). Kết quả hiển thị Legit hoặc Spam / phishing; lớp dương gồm
 cả spam và phishing. Python service và app Next chỉ bind loopback.
@@ -121,4 +124,5 @@ Web demo không dùng `preprocess.py` và `pipeline_cache.py` ở thư mục nà
 sao đóng băng trong `web/backend/frozen_pipeline/` (đúng code đã train run đang pin),
 và từ chối run có chữ ký tiền xử lý khác bản sao đó. Sửa hai file ở thư mục gốc không
 ảnh hưởng web; muốn web dùng code mới thì train run mới, chép nguyên byte hai file gốc
-đã train run đó vào `web/backend/frozen_pipeline/`, pin run mới và chạy test web backend.
+đã train run đó vào `web/backend/frozen_pipeline/`, đóng gói và pin run mới, tạo lại
+fixture test (`web/backend/tests/build_fixture.py`) và chạy test web backend.

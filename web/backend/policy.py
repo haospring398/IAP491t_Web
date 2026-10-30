@@ -4,13 +4,17 @@ import os
 import re
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
-def load_configuration(root=ROOT):
+# Thư mục web/: contracts, run đóng gói và đường dẫn run tương đối đều tính từ đây, nên
+# web/ chạy được cả khi chép riêng, không cần thư mục gốc của project.
+WEB_ROOT = Path(__file__).resolve().parents[1]
+
+
+def load_configuration(root=WEB_ROOT):
     """Broken administrator-owned configuration must not prevent liveness."""
     documents = []
     for name in ("transport-policy.json", "analysis.schema.json", "transport-policy.schema.json", "explanation-factors.json"):
         try:
-            document = json.loads((root / "web/contracts" / name).read_text(encoding="utf-8"))
+            document = json.loads((root / "contracts" / name).read_text(encoding="utf-8"))
             documents.append(document if isinstance(document, dict) else {})
         except (OSError, ValueError, UnicodeError):
             documents.append({})
@@ -23,11 +27,12 @@ POLICY, SCHEMA, POLICY_SCHEMA, FACTORS = load_configuration()
 UUID_PATTERN = r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
 UUID = re.compile(UUID_PATTERN)
 UNAVAILABLE_ERROR = {"http": 503, "retryAfterSeconds": 5, "message": "Analysis is unavailable. Try again later."}
-# Run 19-10 (train.py --mode baseline) mà web phục vụ, tương đối từ ROOT. runs/ không
-# nằm trong git: máy khác phải train run tương ứng (hoặc đặt IAP_WEB_RUN_PATH), nếu
-# không worker sẽ không sẵn sàng. None nghĩa là chưa cấu hình.
-RUN_PATH = "runs/2026-10-23_web2"
-# Biến môi trường ghi đè RUN_PATH; tiến trình con spawn kế thừa nên test dùng được run fixture.
+# Run 19-10 (train.py --mode baseline) mà web phục vụ, tương đối từ WEB_ROOT. web/model/
+# không nằm trong git: chép run vào bằng web/scripts/bundle-run.py (hoặc đặt
+# IAP_WEB_RUN_PATH), nếu không worker sẽ không sẵn sàng. None nghĩa là chưa cấu hình.
+RUN_PATH = "model/2026-10-23_web2"
+# Biến môi trường ghi đè RUN_PATH (đường dẫn tương đối cũng tính từ WEB_ROOT); tiến trình
+# con spawn kế thừa nên test dùng được run fixture.
 RUN_PATH_ENV = "IAP_WEB_RUN_PATH"
 
 

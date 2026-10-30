@@ -85,8 +85,10 @@ are local test artifacts, not retained email history.
 
 `test:real-model` starts the real local Python model service and production
 Next server, uploads five MIME cases in the browser, compares actual API/proxy
-responses and checks service-down clearing. It requires the parent project's
-working `.venv` and verified selected run. It is optional when sharing only `web/`.
+responses and checks service-down clearing. Test này chạy `python -m backend` từ `web/`,
+lấy trình thông dịch từ biến `IAP_WEB_PYTHON` nếu có, nếu không thì `web/.venv`, rồi tới
+`.venv` ở thư mục gốc repository; nếu không có cái nào thì test báo lỗi rõ ràng. Nó cần run
+đã đóng gói trong `web/model/` (hoặc `IAP_WEB_RUN_PATH`).
 The frontend-only `test:integration` uses a hermetic loopback HTTP
 backend fixture's marked sample verifies actual route configuration,
 multipart serialization, canonical filename, server bearer, trusted deadline and

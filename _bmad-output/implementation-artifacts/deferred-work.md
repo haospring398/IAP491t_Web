@@ -15,3 +15,9 @@
   resolved: 2026-10-20 bmad-project-context refresh; the AGENTS.md block documents web/backend's dependency on root modules and its test command.
 
 
+- source_spec: `_bmad-output/implementation-artifacts/spec-web-standalone.md`
+  summary: Let backend tests in a git clone of web/ (no bundle) get the exact NLTK stopwords/wordnet the fixture was trained with, e.g. by shipping them beside the fixture.
+  evidence: The fixture records lemmatization and NLTK stopwords; without web/model/nltk_data or the root .venv data the preprocessing signature differs and adapter tests fail at MODEL_COMPATIBILITY.
+- source_spec: `_bmad-output/implementation-artifacts/spec-web-standalone.md`
+  summary: Tie bundled NLTK data to each run and verify it at bundle time (stopwords against the manifest, a hash of wordnet.zip).
+  evidence: web/model/nltk_data is shared and replaced by every bundle; wordnet content is not part of the preprocessing signature, so a different wordnet.zip changes lemmatization without rejection.

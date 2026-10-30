@@ -10,8 +10,8 @@
     {
       "source": "AGENTS.md",
       "snapshot": "PROJECT-CONTEXT.md",
-      "sourceSha256": "42c1492d1f0e9ff12b661b50f998f5432a3a9e1f34749cb2afea900043442511",
-      "snapshotSha256": "42c1492d1f0e9ff12b661b50f998f5432a3a9e1f34749cb2afea900043442511"
+      "sourceSha256": "d6b3dbafc5553a8d28fbc450dbe1f5cc866fc8541f1cf8ce0eb5b7496cbaf113",
+      "snapshotSha256": "d6b3dbafc5553a8d28fbc450dbe1f5cc866fc8541f1cf8ce0eb5b7496cbaf113"
     },
     {
       "source": "_bmad-output/implementation-artifacts/spec-integrate-zip-frontend.md",
@@ -34,8 +34,8 @@
     {
       "source": "web/backend/README.md",
       "snapshot": "backend/README.md",
-      "sourceSha256": "01a335829ed23b93abdec14dae1dc704d00e4a96760785fad74682f3ce4b5399",
-      "snapshotSha256": "10e90467b7e1f70284749c6747c497fe17dba6f07e78ef0a8b5b9d3afd16aa5b"
+      "sourceSha256": "8511728854e96a9c75625ee8b9e85771c6304c26addadf745aace5139f2cbb3b",
+      "snapshotSha256": "f440744be691923730cc0a43b1fc61a58fbef1190e97866de8e8b8aae1167939"
     },
     {
       "source": "_bmad-output/specs/spec-iap-web-application/.memlog.md",

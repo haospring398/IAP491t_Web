@@ -3,6 +3,8 @@ import base64
 import copy
 import contextlib
 import hashlib
+import importlib
+import importlib.util
 import io
 import multiprocessing
 import os
@@ -10,6 +12,7 @@ import pickle
 import json
 import runpy
 import shutil
+import sys
 import tempfile
 import time
 import unittest
@@ -20,15 +23,46 @@ from unittest.mock import AsyncMock, Mock, PropertyMock, patch
 
 from fastapi.testclient import TestClient
 from starlette.requests import Request
-from web.backend.adapter import (MANIFEST, MODEL_DIR, Adapter, ControlledUnpickler, StartupFailure, worker,
-                                 multipart_email, validate_email)
-from web.backend.policy import (POLICY, SCHEMA, POLICY_SCHEMA, ROOT, RUN_PATH_ENV, Rejection, validate_policy,
-                                load_configuration)
-from web.backend.service import Supervisor, create_app
+
+TESTS = Path(__file__).resolve().parent
+BACKEND_DIR = TESTS.parent
+WEB_ROOT = BACKEND_DIR.parent
+
+
+def backend_package():
+    """Tên import của backend: "backend" khi chạy từ web/, "web.backend" khi chạy từ thư mục gốc."""
+    for name in ("backend", "web.backend"):
+        try:
+            spec = importlib.util.find_spec(name)
+        except ImportError:
+            continue
+        if spec and spec.origin and Path(spec.origin).resolve().parent == BACKEND_DIR:
+            return name
+    # Không import được theo tên nào (ví dụ chạy script trong tests/): thêm web/ vào sys.path.
+    sys.path.insert(0, str(WEB_ROOT))
+    return "backend"
+
+
+PACKAGE = backend_package()
+backend_module = importlib.import_module(PACKAGE)
+adapter_module = importlib.import_module(f"{PACKAGE}.adapter")
+policy_module = importlib.import_module(f"{PACKAGE}.policy")
+service_module = importlib.import_module(f"{PACKAGE}.service")
+from_adapter = ("MANIFEST", "MODEL_DIR", "Adapter", "ControlledUnpickler", "StartupFailure", "worker",
+                "multipart_email", "validate_email")
+MANIFEST, MODEL_DIR, Adapter, ControlledUnpickler, StartupFailure, worker, multipart_email, validate_email = (
+    getattr(adapter_module, name) for name in from_adapter)
+POLICY, SCHEMA, POLICY_SCHEMA, RUN_PATH_ENV, Rejection, validate_policy, load_configuration = (
+    getattr(policy_module, name) for name in
+    ("POLICY", "SCHEMA", "POLICY_SCHEMA", "RUN_PATH_ENV", "Rejection", "validate_policy", "load_configuration"))
+Supervisor, create_app = service_module.Supervisor, service_module.create_app
 
 TOKEN = "test-only-local-demo-token"
-SAMPLES = sorted((ROOT / "web/backend/samples").glob("*.eml"))
-# Run 19-10 nhỏ train trên email tổng hợp; chưa có run thật nên test dùng run này.
+SAMPLES = sorted((BACKEND_DIR / "samples").glob("*.eml"))
+# Run 19-10 nhỏ train trên email tổng hợp, commit sẵn trong tests/fixture_run/ (tạo lại bằng
+# build_fixture.py trong repository đầy đủ). Test chỉ dùng bản sao của nó.
+FIXTURE_RUN = TESTS / "fixture_run"
+FIXTURE_COUNT = 120
 FIXTURE = {}
 
 
@@ -46,10 +80,8 @@ def synthetic_email(index, positive):
     return msg.as_bytes()
 
 
-def build_fixture_run(root, count=120):
-    import pandas as pd
-    import train
-    from dataset_audit import record_id
+def fixture_rows(count=FIXTURE_COUNT):
+    """Các dòng dữ liệu đã train run fixture; RecordId giống dataset_audit.record_id."""
     rows = []
     for index in range(count):
         positive = bool(index % 2)
@@ -57,18 +89,15 @@ def build_fixture_run(root, count=120):
         rows.append({"Text": synthetic_email(index, positive), "Class": int(positive), "Source": "synthetic",
                      "Location": location, "LabelKind": "phishing" if positive else "legitimate",
                      "OriginalLabel": str(int(positive)), "LabelBasis": "synthetic test fixture",
-                     "RecordId": record_id(location)})
-    frame = pd.DataFrame(rows)
-    run = root / "run"
-    # BASE_DIR tạm để cache tiền xử lý không ghi vào thư mục project.
-    with patch.object(train, "BASE_DIR", root), contextlib.redirect_stdout(io.StringIO()):
-        train.training(data=frame, output_dir=run, epochs=5, train_bert=False, run_ablation=False)
-    return run, dict(zip(frame.RecordId, frame.Text))
+                     "RecordId": hashlib.sha256(location.encode("utf-8")).hexdigest()})
+    return rows
 
 
 def setUpModule():
     FIXTURE["temp"] = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
-    FIXTURE["run"], FIXTURE["raws"] = build_fixture_run(Path(FIXTURE["temp"].name))
+    FIXTURE["run"] = Path(FIXTURE["temp"].name) / "run"
+    shutil.copytree(FIXTURE_RUN, FIXTURE["run"])
+    FIXTURE["raws"] = {row["RecordId"]: row["Text"] for row in fixture_rows()}
     FIXTURE["previous_env"] = os.environ.get(RUN_PATH_ENV)
     os.environ[RUN_PATH_ENV] = str(FIXTURE["run"])
 
@@ -115,7 +144,7 @@ def repeatability_child(connection, ordered):
         a = Adapter()
         results = []
         for name in ordered:
-            raw = (ROOT / "web/backend/samples" / name).read_bytes()
+            raw = (BACKEND_DIR / "samples" / name).read_bytes()
             vector = a.vector(raw)
             results.append((name, hashlib.sha256(vector.tobytes()).hexdigest(), a.analyze(raw)))
         connection.send((True, results))
@@ -123,6 +152,41 @@ def repeatability_child(connection, ordered):
         connection.send((False, type(exc).__name__))
     finally:
         connection.close()
+
+
+def served_vectors_child(connection, raws):
+    try:
+        a = Adapter()
+        connection.send((True, [(a.vector(raw)[0], a.analyze(raw)["label"]) for raw in raws]))
+    except Exception as exc:
+        connection.send((False, type(exc).__name__))
+    finally:
+        connection.close()
+
+
+def in_hash_seed_child(target, *args):
+    """Chạy target trong tiến trình spawn với PYTHONHASHSEED=0 và một luồng, như worker của service."""
+    environment = {"PYTHONHASHSEED": "0", "OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1", "MKL_NUM_THREADS": "1"}
+    ctx = multiprocessing.get_context("spawn")
+    parent, child = ctx.Pipe()
+    with patch.dict(os.environ, environment):
+        process = ctx.Process(target=target, args=(child, *args))
+        process.start()
+    child.close()
+    try:
+        if not parent.poll(120):
+            raise AssertionError("Hash-seed child timeout")
+        ok, output = parent.recv()
+        if not ok:
+            raise AssertionError(output)
+        return output
+    finally:
+        process.join(5)
+        if process.is_alive():
+            process.kill()
+            process.join(5)
+        parent.close()
+        process.close()
 
 
 class WorkerUploadLifetime(unittest.TestCase):
@@ -167,8 +231,8 @@ class WorkerUploadLifetime(unittest.TestCase):
 
                 connection = Connection()
                 # Plain replacements avoid mock call histories retaining the body.
-                with patch("web.backend.adapter.Adapter", new=lambda *_: Model()), \
-                     patch("web.backend.adapter.multipart_email", new=lambda *_: b"parsed email"):
+                with patch(f"{PACKAGE}.adapter.Adapter", new=lambda *_: Model()), \
+                     patch(f"{PACKAGE}.adapter.multipart_email", new=lambda *_: b"parsed email"):
                     worker(connection, None)
                 self.assertTrue(connection.checked_next_receive)
                 self.assertTrue(connection.closed)
@@ -208,11 +272,11 @@ class Boundaries(unittest.TestCase):
         with patch.dict(POLICY["limits"], {"decodedBytes": 2}):
             self.reject("RESOURCE_LIMIT", validate_email, raw)
         with patch.dict(POLICY["limits"], {"mimeParts": 2}):
-            self.reject("RESOURCE_LIMIT", validate_email, (ROOT / "web/backend/samples/multipart.eml").read_bytes())
+            self.reject("RESOURCE_LIMIT", validate_email, (BACKEND_DIR / "samples/multipart.eml").read_bytes())
         with patch.dict(POLICY["limits"], {"mimeDepth": 0}):
             self.assertTrue(validate_email(raw))  # Root depth0.
-            self.reject("RESOURCE_LIMIT", validate_email, (ROOT / "web/backend/samples/multipart.eml").read_bytes())
-        attachment = (ROOT / "web/backend/samples/attachment.eml").read_bytes()
+            self.reject("RESOURCE_LIMIT", validate_email, (BACKEND_DIR / "samples/multipart.eml").read_bytes())
+        attachment = (BACKEND_DIR / "samples/attachment.eml").read_bytes()
         # A named text attachment cannot spend the eligible body budget.
         attachment = attachment.replace(b"application/octet-stream", b"text/plain").replace(b"U2FtcGxlIGF0dGFjaG1lbnQu", base64.b64encode(b"x" * 300))
         with patch.dict(POLICY["limits"], {"decodedBytes": 100}):
@@ -233,13 +297,19 @@ class Boundaries(unittest.TestCase):
                 return (check_scalar, (5, "x", int))
         with self.assertRaises(ValueError):
             ControlledUnpickler(io.BytesIO(pickle.dumps(EstimatorFunctionCall()))).load()
-        with patch("web.backend.adapter.file_sha256", side_effect=ValueError("tampered hash")):
+        with patch(f"{PACKAGE}.adapter.file_sha256", side_effect=ValueError("tampered hash")):
             with self.assertRaises(ValueError):
                 Adapter()
         self.assertIsNone(Supervisor("invalid token").token)
 
 
 class Configuration(unittest.TestCase):
+    def test_bundled_nltk_data_is_first_on_nltk_search_path(self):
+        bundled = WEB_ROOT / "model" / "nltk_data"
+        if not bundled.is_dir():
+            self.skipTest("Chưa đóng gói dữ liệu NLTK vào web/model/")
+        self.assertEqual(os.environ.get("NLTK_DATA", "").split(os.pathsep)[0], str(bundled))
+
     def test_missing_and_malformed_configuration_does_not_abort_import(self):
         from pathlib import Path
         read_text = Path.read_text
@@ -255,14 +325,14 @@ class Configuration(unittest.TestCase):
                             return "{malformed private configuration"
                         return read_text(path, *args, **kwargs)
                     with patch.object(Path, "read_text", read):
-                        imported = runpy.run_path(str(ROOT / "web/backend/policy.py"))
+                        imported = runpy.run_path(str(BACKEND_DIR / "policy.py"))
                     self.assertEqual(imported[documents[name]], {})
                     self.assertTrue(imported["UUID"].fullmatch(str(uuid.uuid4())))
                     with self.assertRaises(ValueError):
                         imported["validate_policy"]()
 
     def test_factor_catalogue_must_be_well_formed(self):
-        from web.backend.policy import FACTORS, validate_factors
+        FACTORS, validate_factors = policy_module.FACTORS, policy_module.validate_factors
         validate_factors(FACTORS)
         broken = [{"version": 2, "factors": FACTORS["factors"]}, {"version": 1, "factors": {}},
                   {"version": 1, "factors": {"Bad-Id": {"label": "x"}}}, {"version": 1, "factors": {"ok": {"label": ""}}},
@@ -323,6 +393,37 @@ class AdapterVerification(unittest.TestCase):
         cls.run_dir = FIXTURE["run"]
         cls.manifest = json.loads((cls.run_dir / MANIFEST).read_text(encoding="utf-8"))
 
+    def test_relative_run_path_resolves_from_web_root_in_any_working_directory(self):
+        try:
+            relative = os.path.relpath(FIXTURE["run"], WEB_ROOT)
+        except ValueError:
+            self.skipTest("Run fixture nằm khác ổ đĩa với web/")
+        previous = os.getcwd()
+        self.addCleanup(os.chdir, previous)
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as foreign:
+            os.chdir(foreign)
+            with patch.dict(os.environ, {RUN_PATH_ENV: relative}):
+                loaded = Adapter()
+            os.chdir(previous)
+        self.assertEqual(loaded.metadata["manifest_sha256"], self.adapter.metadata["manifest_sha256"])
+
+    def test_backend_never_imports_root_modules(self):
+        repository = WEB_ROOT.parent
+        if not (repository / "train.py").is_file():
+            self.skipTest("Bản chép web/ riêng: không có module gốc để import nhầm")
+        self.assertTrue(self.adapter.metadata["manifest_sha256"])
+        environments = {Path(sys.prefix).resolve(), Path(sys.base_prefix).resolve()}
+        leaked = []
+        for name, module in list(sys.modules.items()):
+            location = getattr(module, "__file__", None)
+            if not location:
+                continue
+            path = Path(location).resolve()
+            if (repository in path.parents and WEB_ROOT not in path.parents and
+                    not any(environment == path or environment in path.parents for environment in environments)):
+                leaked.append(name)
+        self.assertEqual(leaked, [])
+
     def test_serving_vectors_and_labels_match_training_test_arrays(self):
         import numpy as np
         import pandas as pd
@@ -333,30 +434,32 @@ class AdapterVerification(unittest.TestCase):
         self.assertEqual(adapter.metadata["selected_model"], self.manifest["selected_model"])
         self.assertEqual(adapter.threshold, config["threshold"])
         expected = adapter.classifier.predict_proba(X)[:, 1] >= config["threshold"]
+        # Vector Doc2Vec phụ thuộc hash seed; fixture train với PYTHONHASHSEED=0 như tiến trình
+        # con của service, nên so trong tiến trình con spawn có cùng hash seed.
+        served = in_hash_seed_child(served_vectors_child, [FIXTURE["raws"][record] for record in metadata.RecordId])
         labels = []
-        for row, record in enumerate(metadata.RecordId):
-            raw = FIXTURE["raws"][record]
-            np.testing.assert_allclose(adapter.vector(raw)[0], X[row], rtol=0, atol=1e-6)
-            labels.append(adapter.analyze(raw)["label"])
+        for row, (vector, label) in enumerate(served):
+            np.testing.assert_allclose(vector, X[row], rtol=0, atol=1e-6)
+            labels.append(label)
         self.assertEqual(labels, ["phishing" if value else "legit" for value in expected])
         self.assertEqual(set(labels), {"legit", "phishing"})
 
     def test_web_uses_frozen_pipeline_not_root_copy(self):
         import pipeline_cache
         import preprocess
-        from web.backend import FROZEN_PIPELINE
+        FROZEN_PIPELINE = backend_module.FROZEN_PIPELINE
         # Web phải nạp đúng hai module đóng băng cùng run, kể cả khi root đã đổi code.
         for module in (preprocess, pipeline_cache):
             self.assertEqual(Path(module.__file__).resolve().parent, FROZEN_PIPELINE)
         hashed = self.adapter.metadata["code_sha256"]
-        self.assertIn("web/backend/frozen_pipeline/preprocess.py", hashed)
+        self.assertIn("backend/frozen_pipeline/preprocess.py", hashed)
         self.assertNotIn("preprocess.py", hashed)
 
     def test_independent_scaled_values_composition_and_classifier_input(self):
         import numpy as np
         import preprocess
         adapter = self.adapter
-        raw = (ROOT / "web/backend/samples/html.eml").read_bytes()
+        raw = (BACKEND_DIR / "samples/html.eml").read_bytes()
         raw_features = np.asarray(preprocess.extract_engineered_features(raw), dtype=np.float32)
         scaled = (raw_features - adapter.scaler.mean_) / adapter.scaler.scale_
         observed_embeddings = []
@@ -429,7 +532,7 @@ class AdapterVerification(unittest.TestCase):
                     Adapter()
                 self.assertEqual(caught.exception.stage, stage)
         # Chưa cấu hình: không có biến môi trường và RUN_PATH là None.
-        with patch.dict(os.environ, {RUN_PATH_ENV: ""}), patch("web.backend.policy.RUN_PATH", None), \
+        with patch.dict(os.environ, {RUN_PATH_ENV: ""}), patch(f"{PACKAGE}.policy.RUN_PATH", None), \
                 self.assertRaises(StartupFailure) as caught:
             Adapter()
         self.assertEqual(caught.exception.stage, "RUN_VERIFICATION")
@@ -482,10 +585,10 @@ class AdapterVerification(unittest.TestCase):
         self.assertNotEqual(hashlib.sha256(blob).hexdigest(), self.adapter.release)
 
     def test_startup_attribution_never_retains_raw_exception(self):
-        with patch("web.backend.adapter.file_sha256", side_effect=ValueError("private email and Bearer secret")):
+        with patch(f"{PACKAGE}.adapter.file_sha256", side_effect=ValueError("private email and Bearer secret")):
             self.assert_worker_unready("RUN_VERIFICATION")
         connection = Mock()
-        with patch("web.backend.adapter.Adapter", side_effect=RuntimeError("private email and Bearer secret")):
+        with patch(f"{PACKAGE}.adapter.Adapter", side_effect=RuntimeError("private email and Bearer secret")):
             worker(connection, None)
         connection.send.assert_called_once_with(("unavailable", "DEPENDENCY_LOAD"))
         supervisor = Supervisor(TOKEN)
@@ -519,7 +622,6 @@ class RealModelAPI(unittest.TestCase):
 
     def test_real_five_mime_cases_exact_envelope_and_pinned_metadata(self):
         from jsonschema import Draft7Validator
-        from web.backend.policy import SCHEMA
         validator = Draft7Validator(SCHEMA)
         for sample in SAMPLES:
             with self.subTest(sample=sample.name):
@@ -798,7 +900,7 @@ class Lifecycle(unittest.IsolatedAsyncioTestCase):
         process = Mock()
         process.is_alive.return_value = True
         supervisor.process = process
-        with patch("web.backend.service.os._exit") as exit_process:
+        with patch(f"{PACKAGE}.service.os._exit") as exit_process:
             await supervisor.recycle()
         exit_process.assert_called_once_with(1)
         process.terminate.assert_called_once()
@@ -871,7 +973,7 @@ class Explanation(unittest.TestCase):
         import xgboost
         import preprocess
         from jsonschema import Draft7Validator
-        from web.backend.policy import FACTORS
+        FACTORS = policy_module.FACTORS
         adapter, validator = self.adapter, Draft7Validator(SCHEMA)
         self.assertEqual(adapter.metadata["explanation"], "xgboost_pred_contribs")
         names = ["text_content", *preprocess.FEATURE_NAMES]
@@ -931,7 +1033,7 @@ class Explanation(unittest.TestCase):
                 self.assertEqual(set(adapter.analyze(raw)), {"analysis_status", "label"})
 
     def test_mismatch_and_catalogue_gap_fail_closed(self):
-        from web.backend.policy import FACTORS
+        FACTORS = policy_module.FACTORS
         raw = SAMPLES[0].read_bytes()
         booster = self.adapter.classifier.get_booster()
         predict = booster.predict

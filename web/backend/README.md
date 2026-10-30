@@ -1,11 +1,18 @@
 # Local real-model service
 
 Demo Windows cục bộ này phục vụ một run 19-10 do `train.py --mode baseline` tạo ra
-(`runs/<tên>/dumped_models/classification/run_manifest.json`, schema 2). Run được pin
-bằng `RUN_PATH` trong `web/backend/policy.py` (tương đối từ thư mục gốc) hoặc biến môi
-trường `IAP_WEB_RUN_PATH`. Hiện pin `runs/2026-10-23_web2` (XGBoost, train 2026-10-23,
-có lemmatize và stopwords NLTK). `runs/` không nằm trong git: trên máy khác phải train
-run tương ứng hoặc đặt `IAP_WEB_RUN_PATH`, nếu không worker sẽ không sẵn sàng.
+(`dumped_models/classification/run_manifest.json`, schema 2). Run được pin bằng
+`RUN_PATH` trong `web/backend/policy.py` hoặc biến môi trường `IAP_WEB_RUN_PATH`; đường
+dẫn tương đối của cả hai đều tính từ thư mục `web/`, không phải thư mục gốc project.
+Hiện pin `model/2026-10-23_web2`: bản đóng gói của `runs/2026-10-23_web2` (XGBoost, train
+2026-10-23, có lemmatize và stopwords NLTK) do `web/scripts/bundle-run.py` chép vào
+`web/model/`. `web/model/` không nằm trong git (khoảng 665 MB): chép hoặc nén cả `web/`
+thì mang theo run; clone từ git thì phải chạy lại script đóng gói (cần run gốc) hoặc đặt
+`IAP_WEB_RUN_PATH`, nếu không worker sẽ không sẵn sàng.
+
+`web/` chạy độc lập, không cần phần còn lại của project: backend chỉ dùng import tương
+đối trong package, đọc contracts, run và samples theo thư mục `web/`, và không import
+module nào ở thư mục gốc (kể cả trong test).
 
 Web không dùng `preprocess.py`/`pipeline_cache.py` ở thư mục gốc mà dùng bản sao đóng
 băng trong `web/backend/frozen_pipeline/`: đúng từng byte code đã train run đang pin
@@ -23,18 +30,52 @@ trên tập test.
 
 ## Start locally
 
-Run from the project root using the existing Python 3.11 `.venv`. Install only the
-API dependencies; this does not reinstall the ML packages:
+### Đóng gói run (một lần, trong repository đầy đủ)
+
+`bundle-run.py` chỉ dùng thư viện chuẩn, chạy bằng Python nào cũng được. Nó kiểm SHA-256
+của mọi artifact trong manifest ngay lúc chép, rồi chép `run_manifest.json`, các artifact
+đó và dữ liệu NLTK đã dùng lúc train (`corpora/stopwords`, `corpora/wordnet.zip`; mặc định
+lấy từ `.venv/nltk_data`, đổi bằng `--nltk-data`) vào `web/model/<run-id>/` và
+`web/model/nltk_data/`. Mọi thứ được ghi vào một thư mục tạm rồi mới đổi tên vào chỗ: hash
+sai hoặc thiếu file thì lệnh thoát với mã khác 0 và `web/model/` không đổi. Thư mục run và
+`nltk_data` được thay bằng hai lần đổi tên riêng; nếu lần đổi tên `nltk_data` lỗi sau khi
+thư mục run đã được thay, thông báo lỗi nêu rõ thư mục nào đã bị thay. `--run` và
+`--nltk-data` tương đối tính từ thư mục hiện hành (khác `RUN_PATH`/`IAP_WEB_RUN_PATH`,
+vốn tính từ `web/`).
 
 ```powershell
-.venv/Scripts/python.exe -m pip install -r web/backend/requirements-api.txt
+python web/scripts/bundle-run.py --run runs/2026-10-23_web2
 ```
 
+`web/backend/__init__.py` đặt `web/model/nltk_data` lên đầu đường tìm của NLTK (biến
+`NLTK_DATA`, tiến trình con kế thừa), nên stopwords và wordnet trùng lúc train kể cả trên
+máy không có `.venv` gốc.
+
+### Chạy độc lập từ `web/`
+
+Dùng Python 3.11 và một virtualenv riêng `web/.venv` (git bỏ qua). `requirements.txt` gồm
+`requirements-api.txt` và các gói ML khoá đúng phiên bản trong `.venv` gốc đã train run.
 Generate a token in a Python-service PowerShell window, then start the service:
 
 ```powershell
+cd web
+py -3.11 -m venv .venv
+.venv/Scripts/python.exe -m pip install -r backend/requirements.txt
 $env:ML_API_TOKEN = (.venv/Scripts/python.exe -c "import secrets; print(secrets.token_urlsafe(32))")
 $env:ML_API_TOKEN  # Display only in your local terminal to copy into the second window.
+.venv/Scripts/python.exe -m backend
+```
+
+### Chạy từ thư mục gốc
+
+Cách cũ vẫn dùng được với `.venv` gốc (đã có gói ML, chỉ cần thêm gói API). Backend vẫn
+phục vụ run đã đóng gói trong `web/model/`; muốn dùng thẳng run trong `runs/` thì đặt
+`$env:IAP_WEB_RUN_PATH = '../runs/2026-10-23_web2'` (tương đối từ `web/`). Hai cách cho
+cùng `manifest_sha256` vì script đóng gói chép nguyên byte manifest.
+
+```powershell
+.venv/Scripts/python.exe -m pip install -r web/backend/requirements-api.txt
+$env:ML_API_TOKEN = (.venv/Scripts/python.exe -c "import secrets; print(secrets.token_urlsafe(32))")
 .venv/Scripts/python.exe -m web.backend
 ```
 
@@ -135,8 +176,11 @@ The observed environment is Python 3.11.2 on native Windows; ML packages are
 NumPy 2.4.6, SciPy 1.17.1, Gensim 4.4.0, scikit-learn 1.9.1, XGBoost 3.2.0 and
 NLTK 3.10.3, installed directly in `.venv` at the same versions (the former
 `project_legacy_packages.pth` link to a sibling `venv/` was removed on 2026-10-20).
-`requirements-api.txt` pins the API stack only; it is not a portable ML
-lock. Do not distribute either virtualenv as a self-contained release. Adapter
+`requirements.txt` khoá toàn bộ backend (API, gói ML và phụ thuộc gián tiếp) theo đúng
+các phiên bản này; `requirements-api.txt` chỉ khoá phần API, dùng khi `.venv` gốc đã có
+gói ML. Chữ ký tiền xử lý băm cả phiên bản nltk/beautifulsoup4, danh sách stopwords và
+việc có wordnet hay không, nên môi trường lệch sẽ bị từ chối (`MODEL_COMPATIBILITY`).
+Không phân phối virtualenv; cài lại từ `requirements.txt`. Adapter
 startup records manifest/code hashes, actual package versions and settings in
 transient supervisor metadata for local verification without widening HTTP results.
 
@@ -144,6 +188,8 @@ transient supervisor metadata for local verification without widening HTTP resul
 
 ```powershell
 .venv/Scripts/python.exe -m unittest discover -s web/backend/tests -v
+# Hoặc trong web/ (kể cả bản chép riêng), với web/.venv:
+#   .venv/Scripts/python.exe -m unittest discover -s backend/tests -v
 cd web/frontend
 npm.cmd run contracts:check
 npm.cmd test
@@ -155,19 +201,25 @@ npm.cmd run test:real-model
 npm.cmd run test:browser
 ```
 
-Test backend tự train một run 19-10 nhỏ trên email tổng hợp (khoảng 30 giây) bằng
-`train.py` gốc nhưng với hai module đóng băng (vì `web.backend` được import trước), và
-trỏ `IAP_WEB_RUN_PATH` tới run đó; chúng kiểm tra vector/nhãn lúc phục vụ trùng mảng test
+Test backend dùng một run 19-10 nhỏ (khoảng 1,5 MB) train trên email tổng hợp, commit sẵn
+trong `web/backend/tests/fixture_run/` (`web/.gitattributes` tắt đổi xuống dòng vì manifest
+băm từng byte). Chúng chép run này vào thư mục tạm, trỏ `IAP_WEB_RUN_PATH` tới bản chép và
+không import module nào ở thư mục gốc, nên chạy được cả từ thư mục gốc (`web.backend`) lẫn
+từ `web/` (`backend`). Khi đổi bản đóng băng hoặc email tổng hợp, tạo lại fixture trong
+repository đầy đủ bằng `.venv/Scripts/python.exe web/backend/tests/build_fixture.py` (train
+qua `train.py` gốc với hai module đóng băng và `PYTHONHASHSEED=0` như worker, vì vector
+Doc2Vec phụ thuộc hash seed). Chúng kiểm tra vector/nhãn lúc phục vụ trùng mảng test
 lúc train, và các ca run chưa cấu hình, chưa hoàn tất, artifact bị sửa, lệch schema
 hoặc tiền xử lý, BERT được chọn. Nhóm test `Explanation` dùng bản sao fixture chọn
 XGBoost để so factor với đóng góp tính độc lập, kiểm lặp lại/đảo thứ tự/khởi động lại và
-các ca fail closed. `test:real-model` cần `IAP_WEB_RUN_PATH` (hoặc `RUN_PATH`) trỏ tới
-một run đã train và yêu cầu run đó trả explanation.
+các ca fail closed. `test:real-model` khởi động backend bằng `python -m backend` từ
+`web/`, với Python lấy từ biến `IAP_WEB_PYTHON` (nếu có), rồi `web/.venv`, rồi `.venv` gốc; nó cần run đã
+đóng gói (hoặc `IAP_WEB_RUN_PATH`) và yêu cầu run đó trả explanation.
 
 Edge is installed on the tested workstation. For another installed browser select
 its Playwright channel, or install Playwright Chromium. `test:real-model` starts actual
 loopback web/backend/Next processes and checks five MIME samples through real API,
-proxy and browser plus unavailable-result clearing and requires the full repository.
+proxy and browser plus unavailable-result clearing; nó chỉ cần `web/` có run đã đóng gói.
 The frontend-only `test:integration` checks transport serialization with a clearly
 marked fixture backend. Browser regression fixtures
 remain marked samples. Backend tests compare vector hashes and labels for five
@@ -179,8 +231,10 @@ timing/memory acceptance. Existing offline tests are assessed separately.
 
 Đổi sang run mới: train bằng `train.py --mode baseline --output runs/<tên>` với code
 hiện tại, chép nguyên byte `preprocess.py` và `pipeline_cache.py` ở thư mục gốc (đúng
-bản đã train run đó) đè lên hai file trong `web/backend/frozen_pipeline/`, đặt
-`RUN_PATH` (hoặc `IAP_WEB_RUN_PATH`), chạy test backend rồi khởi động lại. `train.py` mặc
+bản đã train run đó) đè lên hai file trong `web/backend/frozen_pipeline/`, đóng gói bằng
+`python web/scripts/bundle-run.py --run runs/<tên>`, đặt `RUN_PATH = "model/<tên>"` (hoặc
+`IAP_WEB_RUN_PATH`), tạo lại fixture bằng `build_fixture.py`, chạy test backend rồi khởi
+động lại. `train.py` mặc
 định train cả BERT; nếu BERT được chọn trên validation thì web từ chối khởi động
 (`MODEL_COMPATIBILITY`), nên với run dành cho web hãy thêm `--skip-text-training`. Sửa
 hai file đóng băng làm đổi chữ ký tiền xử lý, nên run đang pin sẽ bị từ chối. Nhãn `phishing` hiện dựa trên bằng chứng validation;

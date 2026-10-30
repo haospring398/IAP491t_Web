@@ -13,8 +13,8 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette.requests import ClientDisconnect
 
-from web.backend.adapter import worker, STARTUP_STAGES
-from web.backend.policy import POLICY, UUID, UNAVAILABLE_ERROR, Rejection, validate_policy
+from .adapter import worker, STARTUP_STAGES
+from .policy import POLICY, UUID, UNAVAILABLE_ERROR, Rejection, validate_policy
 
 FAILURE_STAGES = STARTUP_STAGES | {"CONFIGURATION_INVALID", "AUTH_CONFIGURATION", "WORKER_SPAWN", "WORKER_STARTUP_TIMEOUT", "WORKER_STARTUP_FAILED"}
 

@@ -10,7 +10,7 @@ from email import policy as email_policy
 from email.parser import BytesParser
 from importlib.metadata import version
 
-from web.backend.policy import FACTORS, POLICY, ROOT, Rejection, pinned_run
+from .policy import FACTORS, POLICY, WEB_ROOT, Rejection, pinned_run
 
 STARTUP_STAGES = frozenset({"DEPENDENCY_LOAD", "RUN_VERIFICATION", "RELEASE_CHANGED", "ARTIFACT_BYTES",
                            "ARTIFACT_LOAD", "MODEL_COMPATIBILITY", "INFERENCE_SETTINGS", "EXPLANATION", "PROVENANCE"})
@@ -187,7 +187,7 @@ class Adapter:
             raise StartupFailure(self.startup_stage) from None
 
     def _load(self, pinned, expected_manifest):
-        os.chdir(ROOT)
+        os.chdir(WEB_ROOT)
         import math
         import preprocess
         import pipeline_cache
@@ -199,8 +199,9 @@ class Adapter:
         configured = pinned_run()
         if not configured:
             raise ValueError("No web run configured")
-        expected = (ROOT / configured).resolve()
-        run = expected if pinned is None else (ROOT / pinned).resolve()
+        # Đường dẫn tương đối tính từ web/, chạy từ thư mục nào cũng như nhau.
+        expected = (WEB_ROOT / configured).resolve()
+        run = expected if pinned is None else (WEB_ROOT / pinned).resolve()
         if run != expected:
             raise ValueError("Unexpected demo run")
         manifest_bytes = (run / MANIFEST).read_bytes()
@@ -282,7 +283,7 @@ class Adapter:
             raise ValueError("Manifest changed during loading")
         self.startup_stage = "PROVENANCE"
         self.metadata = {
-            "run": str(run.relative_to(ROOT) if ROOT in run.parents else run),
+            "run": str(run.relative_to(WEB_ROOT) if WEB_ROOT in run.parents else run),
             "manifest_sha256": self.release, "target_mode": target, "selected_model": selected,
             "threshold": self.threshold, "feature_width": width,
             "doc2vec_size": self.doc.vector_size, "engineered_size": self.scaler.n_features_in_,
@@ -291,9 +292,9 @@ class Adapter:
             "preprocessing_signature": signature,
             "explanation": "xgboost_pred_contribs" if self.explained else None,
             "hash_seed": os.environ.get("PYTHONHASHSEED"), "numerical_threads": 1,
-            "code_sha256": {name: file_sha256(ROOT / name) for name in
-                            ("web/backend/frozen_pipeline/preprocess.py", "web/backend/frozen_pipeline/pipeline_cache.py",
-                             "web/backend/adapter.py", "web/backend/service.py", "web/backend/policy.py")},
+            "code_sha256": {name: file_sha256(WEB_ROOT / name) for name in
+                            ("backend/frozen_pipeline/preprocess.py", "backend/frozen_pipeline/pipeline_cache.py",
+                             "backend/adapter.py", "backend/service.py", "backend/policy.py")},
             "packages": {name: version(name) for name in
                          ("numpy", "scipy", "gensim", "scikit-learn", "xgboost", "nltk", "fastapi", "uvicorn", "python-multipart")},
         }
